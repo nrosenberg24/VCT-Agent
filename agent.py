@@ -1,5 +1,7 @@
 import os
 import sqlite3
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
@@ -19,7 +21,7 @@ vectorstore = FAISS.load_local(
     allow_dangerous_deserialization=True
 )
 
-DB_PATH = "vct.db"
+DB_PATH = Path(__file__).resolve().parent / "vct.db"
 
 system_prompt = """
 You are Valorant Betting Model Assistant.
@@ -157,7 +159,7 @@ def list_tables(_: str = "") -> str:
     Use this tool when the correct table is uncertain.
     """
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
         query = """
         SELECT name
         FROM sqlite_master
@@ -187,7 +189,7 @@ def describe_table(table_name: str) -> str:
         return "Invalid table name."
 
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
         query = f"PRAGMA table_info({table_name})"
         df = pd.read_sql_query(query, conn)
         conn.close()
@@ -210,7 +212,7 @@ def get_top_agents_for_player(player_name: str) -> str:
     or asks for the player's most common agents.
     """
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
 
         exact_sql = """
         SELECT p.player_name, a.agent_name, COUNT(*) AS maps_played
@@ -267,7 +269,7 @@ def get_kill_avg_per_map(player_name: str) -> str:
     average kills, or kills per map.
     """
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
 
         exact_sql = """
         SELECT
@@ -333,7 +335,7 @@ def get_matches_on_date(match_date: str) -> str:
     Use this tool when the user asks what matches are on a certain date.
     """
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
 
         sql = """
         SELECT
@@ -403,7 +405,7 @@ def query_database(sql_query: str) -> str:
             return f"Blocked query. {word} is not allowed."
 
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
 
         if query_upper.startswith("SELECT"):
             limited_query = f"SELECT * FROM ({query.rstrip(';')}) LIMIT 20"
