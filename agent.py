@@ -59,6 +59,7 @@ Tool rules:
 - Use get_top_agents_for_player when the user asks which agents a player uses most.
 - Use get_kill_avg_per_map when the user asks for a player's average kills per map.
 - Use get_matches_on_date when the user asks what matches are on a certain date.
+- Use get_head_to_head_history when the user asks about the history between two teams.
 - Use list_tables and describe_table before writing SQL if the schema is uncertain.
 - Use query_database for other live database questions.
 - Only use read-only SQL.
@@ -90,6 +91,12 @@ Schedule rules:
 - All schedule questions refer to 2026 unless the user clearly says another year.
 - For schedule questions, return team names, region, and the stored match time.
 - Do not return team IDs or match IDs unless the user explicitly asks for them.
+
+Head-to-head rules:
+- For history between two teams, use get_head_to_head_history.
+- Return newest matches first.
+- Show the match even if map scores are unavailable.
+- For flexible team names, prefer matching the closest valid team names from the database.
 
 Answer style:
 - Give the answer first.
@@ -376,6 +383,124 @@ def get_matches_on_date(match_date: str) -> str:
         return f"Schedule lookup error: {e}"
 
 @tool
+def get_head_to_head_history(team_a: str, team_b: str) -> str:
+    """
+    Return the head-to-head match history between two teams.
+
+    Input should be the two team names separated clearly by the model.
+    Use flexible team-name matching.
+    Return newest matches first.
+    Show each match even if map scores are unavailable.
+    Include match date, event, stage, series score if available, and map scores if available.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
+
+        teams_sql = """
+        SELECT team_id, team_name
+        FROM teams
+        WHERE LOWER(team_name) = LOWER(?)
+           OR LOWER(team_name) LIKE LOWER(?)
+        ORDER BY
+            CASE WHEN LOWER(team_name) = LOWER(?) THEN 0 ELSE 1 END,
+            LENGTH(team_name),
+            team_name
+        LIMIT 1
+        """
+
+        team_a_df = pd.read_sql_query(teams_sql, conn, params=[team_a, f"%{team_a}%", team_a])
+        team_b_df = pd.read_sql_query(teams_sql, conn, params=[team_b, f"%{team_b}%", team_b])
+
+        if team_a_df.empty or team_b_df.empty:
+            conn.close()
+            missing = []
+            if team_a_df.empty:
+                missing.append(team_a)
+            if team_b_df.empty:
+                missing.append(team_b)
+            return f"I could not match these team names in the database: {', '.join(missing)}."
+
+        team_a_id = int(team_a_df.iloc[0]["team_id"])
+        team_b_id = int(team_b_df.iloc[0]["team_id"])
+        team_a_name = team_a_df.iloc[0]["team_name"]
+        team_b_name = team_b_df.iloc[0]["team_name"]
+
+        matches_sql = """
+        SELECT
+            m.match_id,
+            m.match_date,
+            m.event_name,
+            m.stage,
+            t1.team_name AS team1_name,
+            t2.team_name AS team2_name
+        FROM matches m
+        JOIN teams t1 ON t1.team_id = m.team1_id
+        JOIN teams t2 ON t2.team_id = m.team2_id
+        WHERE
+            (m.team1_id = ? AND m.team2_id = ?)
+            OR
+            (m.team1_id = ? AND m.team2_id = ?)
+        ORDER BY m.match_date DESC, m.match_id DESC
+        """
+        matches_df = pd.read_sql_query(
+            matches_sql,
+            conn,
+            params=[team_a_id, team_b_id, team_b_id, team_a_id]
+        )
+
+        if matches_df.empty:
+            conn.close()
+            return f"There are no recorded matches between {team_a_name} and {team_b_name} in the database."
+
+        lines = [f"Head-to-head history: {team_a_name} vs {team_b_name}"]
+
+        for _, match in matches_df.iterrows():
+            match_id = int(match["match_id"])
+
+            maps_sql = """
+            SELECT
+                map_number,
+                map_name,
+                team1_score,
+                team2_score
+            FROM maps
+            WHERE match_id = ?
+            ORDER BY map_number
+            """
+            maps_df = pd.read_sql_query(maps_sql, conn, params=[match_id])
+
+            series_score = "Series score unavailable"
+            map_lines = ["Map scores unavailable"]
+
+            if not maps_df.empty and {"team1_score", "team2_score"}.issubset(set(maps_df.columns)):
+                valid_scores = maps_df.dropna(subset=["team1_score", "team2_score"]).copy()
+
+                if not valid_scores.empty:
+                    team1_maps_won = int((valid_scores["team1_score"] > valid_scores["team2_score"]).sum())
+                    team2_maps_won = int((valid_scores["team2_score"] > valid_scores["team1_score"]).sum())
+                    series_score = f"{match['team1_name']} {team1_maps_won}-{team2_maps_won} {match['team2_name']}"
+
+                    map_lines = []
+                    for _, mp in valid_scores.iterrows():
+                        map_num = int(mp["map_number"]) if pd.notna(mp["map_number"]) else "?"
+                        map_name = mp["map_name"] if pd.notna(mp["map_name"]) else "Unknown map"
+                        map_lines.append(
+                            f"  Map {map_num} {map_name}: {match['team1_name']} {int(mp['team1_score'])}-{int(mp['team2_score'])} {match['team2_name']}"
+                        )
+
+            lines.append(
+                f"{match['match_date']} — {match['team1_name']} vs {match['team2_name']} — {match['event_name']} — {match['stage']}"
+            )
+            lines.append(f"  {series_score}")
+            lines.extend(map_lines)
+
+        conn.close()
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Head-to-head lookup error: {e}"
+
+@tool
 def query_database(sql_query: str) -> str:
     """
     Run a read-only SQL query on the Valorant SQLite database.
@@ -433,6 +558,7 @@ agent = create_agent(
         get_top_agents_for_player,
         get_kill_avg_per_map,
         get_matches_on_date,
+        get_head_to_head_history,
         query_database
     ],
     system_prompt=system_prompt
