@@ -8,7 +8,6 @@ __pycache__/
 
 # RAG / local files
 rag_files/
-faiss_index/
 
 # Streamlit secrets
 .streamlit/secrets.toml
