@@ -19,7 +19,7 @@ vectorstore = FAISS.load_local(
     allow_dangerous_deserialization=True
 )
 
-DB_PATH = r"C:\Users\nater\OneDrive\Desktop\Valorant Model\data\vct.db"
+DB_PATH = "vct.db"
 
 system_prompt = """
 You are Valorant Betting Model Assistant.
