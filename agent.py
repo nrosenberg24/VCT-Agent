@@ -30,6 +30,7 @@ You help with:
 - team and player questions
 - match and map questions
 - event questions
+- schedule questions
 - database-related questions
 - projections and betting model ideas
 - analytics workflow help
@@ -55,6 +56,7 @@ Tool rules:
 - Use get_event_id when the user asks for an event_id.
 - Use get_top_agents_for_player when the user asks which agents a player uses most.
 - Use get_kill_avg_per_map when the user asks for a player's average kills per map.
+- Use get_matches_on_date when the user asks what matches are on a certain date.
 - Use list_tables and describe_table before writing SQL if the schema is uncertain.
 - Use query_database for other live database questions.
 - Only use read-only SQL.
@@ -81,6 +83,11 @@ Stat question rules:
 - Do not answer exact stat questions with estimates.
 - If the question asks for an average, return the average directly instead of listing raw rows unless the user asks for the breakdown.
 - If the question asks for a leader, return the leader directly and include the supporting value when available.
+
+Schedule rules:
+- All schedule questions refer to 2026 unless the user clearly says another year.
+- For schedule questions, return team names, region, and the stored match time.
+- Do not return team IDs or match IDs unless the user explicitly asks for them.
 
 Answer style:
 - Give the answer first.
@@ -315,6 +322,58 @@ def get_kill_avg_per_map(player_name: str) -> str:
         return f"Kill average lookup error: {e}"
 
 @tool
+def get_matches_on_date(match_date: str) -> str:
+    """
+    Return all matches on a given date using the live database.
+
+    Input should be a date in YYYY-MM-DD format.
+    Output should show:
+    Region - Team 1 vs Team 2 - stored time
+
+    Use this tool when the user asks what matches are on a certain date.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+
+        sql = """
+        SELECT
+            m.region,
+            t1.team_name AS team1_name,
+            t2.team_name AS team2_name,
+            m.match_date
+        FROM matches m
+        JOIN teams t1
+            ON t1.team_id = m.team1_id
+        JOIN teams t2
+            ON t2.team_id = m.team2_id
+        WHERE substr(m.match_date, 1, 10) = ?
+        ORDER BY m.match_date, m.match_id
+        """
+
+        df = pd.read_sql_query(sql, conn, params=[match_date])
+        conn.close()
+
+        if df.empty:
+            return f"No matches were found on {match_date}."
+
+        lines = [f"Matches on {match_date}:"]
+        for _, row in df.iterrows():
+            stored_time = str(row["match_date"])[10:].strip()
+            if stored_time:
+                lines.append(
+                    f"{row['region']} - {row['team1_name']} vs {row['team2_name']} - {stored_time}"
+                )
+            else:
+                lines.append(
+                    f"{row['region']} - {row['team1_name']} vs {row['team2_name']}"
+                )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Schedule lookup error: {e}"
+
+@tool
 def query_database(sql_query: str) -> str:
     """
     Run a read-only SQL query on the Valorant SQLite database.
@@ -371,6 +430,7 @@ agent = create_agent(
         describe_table,
         get_top_agents_for_player,
         get_kill_avg_per_map,
+        get_matches_on_date,
         query_database
     ],
     system_prompt=system_prompt
